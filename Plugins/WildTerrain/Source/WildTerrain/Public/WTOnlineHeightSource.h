@@ -36,6 +36,7 @@ public:
 	// --- 1. BOLGE VE KOORDINAT AYARLARI ---
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Region")
 	EWTWorldRegionPreset RegionPreset = EWTWorldRegionPreset::SwissAlps;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Region", meta = (EditCondition = "RegionPreset == EWTWorldRegionPreset::CustomLatLong"))
 	double Latitude = 45.9765;
 
@@ -48,51 +49,61 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Region")
 	float TileSizeMeters = 2000.f;
 
-	// --- 2. SURUS VE OYUN DUZELTMELERI (HIBRI FILTRELER) ---
-	/** Dagin dikligini yumusatmak/abartmak icin carpan (Orn: 0.7 daha uysal tepeler yapar) */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drivability & Tweaks", meta = (ClampMin = "0.1", ClampMax = "3.0"))
-	float ElevationScale = 0.8f;
+	// --- 2. EGIM VE OLCEKLEME (Madde 1) ---
+	/** 1.0 = Gercek Dunya Egimi, 1.2 - 1.5 = Hafif abartili ve dramatik dag manzarasi */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drivability & Scale", meta = (ClampMin = "0.1", ClampMax = "3.0"))
+	float SlopeMultiplier = 1.0f;
 
-	/** En alcak noktayi Z=0 tabanina ceker (Aracin binlerce metre yukarida dogmasini onler) */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drivability & Tweaks")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drivability & Scale")
 	float BaseHeightOffsetMeters = 0.f;
 
-	/** Tekerlek titresimi icin uydu verisinin uzerine mikro cakil gurultusu ekler */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drivability & Tweaks")
-	bool bAddMicroDetailNoise = true;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drivability & Scale")
+	bool bAddMicroDetailNoise = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drivability & Tweaks", meta = (EditCondition = "bAddMicroDetailNoise"))
-	float MicroDetailAmplitudeMeters = 0.6f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drivability & Scale", meta = (EditCondition = "bAddMicroDetailNoise"))
+	float MicroDetailAmplitudeMeters = 0.4f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drivability & Tweaks", meta = (EditCondition = "bAddMicroDetailNoise"))
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Drivability & Scale", meta = (EditCondition = "bAddMicroDetailNoise"))
 	float MicroDetailWavelengthMeters = 20.f;
 
-	// --- API & CACHE ---
-	UPROPERTY(EditAnywhere, Category = "Online")
-	FString BaseUrl = TEXT("https://s3.amazonaws.com/elevation-tiles-prod/terrarium");
+	// --- 3. GAME THREAD API (Madde 2) ---
+	/** Verilen dunya koordinat dikdortgenini kapsayan tum karolari kontrol eder ve eksikleri Game Thread'de indirir */
+	bool EnsureTilesForRect(double MinX, double MinY, double MaxX, double MaxY);
 
 	UFUNCTION(BlueprintCallable, Category = "Terrain|Coordinates")
 	void SetLocationByLatLong(double InLat, double InLon);
-
-	UFUNCTION(BlueprintCallable, Category = "Terrain")
-	bool IsTileReady(double X, double Y) const;
 
 	virtual void PostLoad() override;
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
+
+protected:
+	/** Worker Thread tarafindan cagirilan saf okuma fonksiyonu (Asla indirme yapmaz, kilit minimum tutulur) */
 	virtual float GetBaseHeightMeters(double X, double Y) const override;
 
 private:
 	int32 CenterTileX = 536;
 	int32 CenterTileY = 358;
 
+	UPROPERTY(VisibleAnywhere, Category = "Online|Debug")
+	float CalculatedRealTileWidthMeters = 27000.f;
+
+	UPROPERTY(VisibleAnywhere, Category = "Online|Debug")
+	float EffectiveElevationScale = 0.074f;
+
 	mutable FCriticalSection TileLock;
 	TMap<FIntPoint, FTileData> CachedTiles;
+
+	// SADECE Game Thread tarafindan kullanilir (Kilit gerektirmez)
 	TSet<FIntPoint> PendingRequests;
 
+	UPROPERTY(EditAnywhere, Category = "Online")
+	FString BaseUrl = TEXT("https://s3.amazonaws.com/elevation-tiles-prod/terrarium");
+
 	void UpdatePresetCoordinates();
-	void RecalculateCenterTiles();
+	void RecalculateMetrics();
+	float FetchTexel(int32 GX, int32 GY) const; // Madde 3: Global Texel Okuyucu
 	void RequestTile(int32 TileX, int32 TileY);
 	void OnTileDownloaded(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful, FIntPoint TileCoord);
 	void DecodePNGToElevation(const TArray<uint8>& RawPNGData, FIntPoint TileCoord);

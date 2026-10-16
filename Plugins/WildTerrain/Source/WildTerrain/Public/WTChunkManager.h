@@ -4,7 +4,9 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "WTChunkTestSpawner.generated.h"
+#include "WTChunkManager.generated.h"
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnTerrainReadySignature);
 
 class AWTChunkActor;
 class UWTHeightSource;
@@ -25,6 +27,10 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain")
 	TObjectPtr<UMaterialInterface> TerrainMaterial;
+
+	/** Zemin tamamen hazýr olduðunda GameMode'u tetikleyecek Event Dispatcher */
+	UPROPERTY(BlueprintAssignable, Category = "Terrain|Events")
+	FOnTerrainReadySignature OnTerrainReady;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain")
 	float ChunkSizeMeters = 256.f;
@@ -48,6 +54,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain|Spawning")
 	float GroundSpawnOffsetCm = 150.f;
 
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Terrain")
+	bool IsTerrainReady() const { return bIsTerrainReady; }
+
+	/** Verilen X, Y koordinatýnýn zemin yüksekliðini güvenle cm cinsinden döner */
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Terrain")
+	FVector GetGroundLocationAt(double WorldX_Cm, double WorldY_Cm, float OffsetZ_Cm = 100.f) const;
+
+	/** Chunk Actor collision üretimi bittiðinde burayý bilgilendirir */
+	void NotifyChunkFinishedBuilding(FIntPoint Coord);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -63,5 +79,6 @@ private:
 	FIntPoint WorldToChunkCoord(const FVector& WorldLocation) const;
 
 	bool bHasPlayerSnappedToGround = false;
-
+	bool bIsTerrainReady = false;
+	TSet<FIntPoint> PendingInitialCoords;
 };

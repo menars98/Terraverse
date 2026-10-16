@@ -6,6 +6,7 @@
 #include "ProceduralMeshComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "Async/Async.h"
+#include <WTChunkManager.h>
 
 AWTChunkActor::AWTChunkActor()
 {
@@ -14,6 +15,7 @@ AWTChunkActor::AWTChunkActor()
 	Mesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("Mesh"));
 	Mesh->bUseAsyncCooking = true;
 	Mesh->bUseComplexAsSimpleCollision = true; // trimesh collision for wheels/raycasts
+	Mesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
 	SetRootComponent(Mesh);
 
 }
@@ -112,4 +114,10 @@ void AWTChunkActor::ApplyMeshData_GameThread(FChunkMeshData MeshData, UMaterialI
 		Mesh->SetMaterial(0, Material);
 	}
 	bIsBuilding = false;
+
+	// Manager'a "Benim collision'ým ve mesh'im hazýr!" haberi veriyoruz:
+	if (AWTChunkManager* Manager = Cast<AWTChunkManager>(GetOwner()))
+	{
+		Manager->NotifyChunkFinishedBuilding(Coord);
+	}
 }

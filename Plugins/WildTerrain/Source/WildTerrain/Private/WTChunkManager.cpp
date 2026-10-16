@@ -1,24 +1,69 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 
-#include "WTChunkTestSpawner.h"
+#include "WTChunkManager.h"
 #include "WTChunkActor.h"
 #include "WTHeightSource.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
 #include "WTOnlineHeightSource.h"
+#include "GameFramework/PlayerStart.h"
 
 AWTChunkManager::AWTChunkManager()
 {
 	PrimaryActorTick.bCanEverTick = false;
 }
 
+FVector AWTChunkManager::GetGroundLocationAt(double WorldX_Cm, double WorldY_Cm, float OffsetZ_Cm) const
+{
+	if (!HeightSource)
+	{
+		return FVector(WorldX_Cm, WorldY_Cm, OffsetZ_Cm);
+	}
+
+	const double XMeters = WorldX_Cm * 0.01;
+	const double YMeters = WorldY_Cm * 0.01;
+	const float GroundMeters = HeightSource->GetHeightMeters(XMeters, YMeters);
+
+	return FVector(WorldX_Cm, WorldY_Cm, (GroundMeters * 100.0) + OffsetZ_Cm);
+}
+
+void AWTChunkManager::NotifyChunkFinishedBuilding(FIntPoint Coord)
+{
+	if (bIsTerrainReady)
+	{
+		return;
+	}
+
+	PendingInitialCoords.Remove(Coord);
+
+	// Kritik 9 chunk'ýn tamamýnýn fizik ve collision'ý bitti mi?
+	if (PendingInitialCoords.IsEmpty())
+	{
+		bIsTerrainReady = true;
+
+		// GameMode ve dinleyen herkesi haberdar et!
+		OnTerrainReady.Broadcast();
+	}
+}
+
 void AWTChunkManager::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// Tick yerine Timer baþlat
+	bIsTerrainReady = false;
+	PendingInitialCoords.Empty();
+
+	// Baþlangýçta (0,0) etrafýndaki 3x3 = 9 chunk'ý 'Kritik Beklenen' listesine alýyoruz
+	for (int32 Y = -1; Y <= 1; ++Y)
+	{
+		for (int32 X = -1; X <= 1; ++X)
+		{
+			PendingInitialCoords.Add(FIntPoint(X, Y));
+		}
+	}
+
 	GetWorldTimerManager().SetTimer(StreamingTimerHandle, this, &AWTChunkManager::UpdateStreaming, UpdateInterval, true, 0.0f);
 }
 
@@ -39,56 +84,29 @@ FIntPoint AWTChunkManager::WorldToChunkCoord(const FVector& WorldLocation) const
 
 void AWTChunkManager::UpdateStreaming()
 {
-	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
-	if (!PlayerPawn || !HeightSource)
+	if (!HeightSource)
 	{
 		return;
 	}
 
-	// --- 1. OYUNCUYU OTOMATIK ZEMINE OTURTMA (GROUND SNAPPING) ---
-	if (bAutoSnapPlayerToGround && !bHasPlayerSnappedToGround)
+	// 1. Merkez noktasýný belirle: Araba varsa arabayý, henüz doðmadýysa PlayerStart'ý referans al!
+	FVector CenterLocation = FVector::ZeroVector;
+	if (APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0))
 	{
-		const FVector PlayerLoc = PlayerPawn->GetActorLocation();
-		const double WorldXMeters = PlayerLoc.X * 0.01;
-		const double WorldYMeters = PlayerLoc.Y * 0.01;
-
-		UWTOnlineHeightSource* OnlineSource = Cast<UWTOnlineHeightSource>(HeightSource);
-		const bool bIsReady = OnlineSource ? OnlineSource->IsTileReady(WorldXMeters, WorldYMeters) : true;
-
-		if (bIsReady)
-		{
-			// Zeminin yuksekligini tam olarak al
-			const float GroundHeightMeters = HeightSource->GetHeightMeters(WorldXMeters, WorldYMeters);
-			const double TargetZ_Cm = (GroundHeightMeters * 100.0) + GroundSpawnOffsetCm;
-
-			FVector NewLoc = PlayerLoc;
-			NewLoc.Z = TargetZ_Cm;
-
-			// Araci teleport et ve varsa dusme hizini sifirla
-			PlayerPawn->SetActorLocation(NewLoc, false, nullptr, ETeleportType::ResetPhysics);
-
-			// Eger aracýn govdesinde Physics simulasyonu varsa hizi durdur
-			if (UPrimitiveComponent* RootPrim = Cast<UPrimitiveComponent>(PlayerPawn->GetRootComponent()))
-			{
-				RootPrim->SetPhysicsLinearVelocity(FVector::ZeroVector);
-			}
-
-			bHasPlayerSnappedToGround = true;
-			UE_LOG(LogTemp, Log, TEXT("Terraverse: Oyuncu basariyla zemine oturtuldu! Z: %.1f cm"), TargetZ_Cm);
-		}
-		else if (OnlineSource)
-		{
-			// Henuz karo inmediyse indirmeyi tetikle ve aracin asagi dusmesini engellemek icin hizi sifirla
-			OnlineSource->GetHeightMeters(WorldXMeters, WorldYMeters);
-			if (UPrimitiveComponent* RootPrim = Cast<UPrimitiveComponent>(PlayerPawn->GetRootComponent()))
-			{
-				RootPrim->SetPhysicsLinearVelocity(FVector::ZeroVector);
-			}
-		}
+		CenterLocation = PlayerPawn->GetActorLocation();
+	}
+	else if (AActor* PlayerStart = UGameplayStatics::GetActorOfClass(this, APlayerStart::StaticClass()))
+	{
+		CenterLocation = PlayerStart->GetActorLocation();
+	}
+	else
+	{
+		CenterLocation = GetActorLocation(); // En kötü ihtimal Manager'ýn kendi konumu
 	}
 
-	const FIntPoint CurrentCoord = WorldToChunkCoord(PlayerPawn->GetActorLocation());
+	const FIntPoint CurrentCoord = WorldToChunkCoord(CenterLocation);
 
+	// 2. Gereken chunk koordinatlarýný topla
 	TSet<FIntPoint> RequiredCoords;
 	for (int32 Y = -ViewDistanceChunks; Y <= ViewDistanceChunks; ++Y)
 	{
@@ -98,7 +116,7 @@ void AWTChunkManager::UpdateStreaming()
 		}
 	}
 
-	// 1. Artýk menzilde olmayan chunk'larý sil
+	// 3. Artýk menzilde olmayanlarý sil
 	TArray<FIntPoint> CoordsToRemove;
 	for (auto& Pair : ActiveChunks)
 	{
@@ -116,35 +134,53 @@ void AWTChunkManager::UpdateStreaming()
 		ActiveChunks.Remove(Coord);
 	}
 
-	// 2. Yeni gereken chunk'larý asenkron spawn et (Döngü burada baþlar)
-	UWTOnlineHeightSource* OnlineSource = Cast<UWTOnlineHeightSource>(HeightSource);
-
-	for (const FIntPoint& Coord : RequiredCoords)
-	{
-		if (!ActiveChunks.Contains(Coord))
+	// 4. Mesafeye göre sýrala (Merkez ilk sýrada!)
+	TArray<FIntPoint> SortedCoords = RequiredCoords.Array();
+	SortedCoords.Sort([&](const FIntPoint& A, const FIntPoint& B)
 		{
-			// EÐER ONLINE KAYNAK KULLANILIYORSA VE TILE HENÜZ ÝNMEDÝYSE BEKLE
-			if (OnlineSource)
+			const int32 DistA = FMath::Square(A.X - CurrentCoord.X) + FMath::Square(A.Y - CurrentCoord.Y);
+			const int32 DistB = FMath::Square(B.X - CurrentCoord.X) + FMath::Square(B.Y - CurrentCoord.Y);
+			return DistA < DistB;
+		});
+
+	// 5. Chunk üretimi
+	UWTOnlineHeightSource* OnlineSource = Cast<UWTOnlineHeightSource>(HeightSource);
+	int32 SpawnedThisUpdate = 0;
+	const int32 MaxNewChunksPerUpdate = 4;
+
+	for (const FIntPoint& Coord : SortedCoords)
+	{
+		if (ActiveChunks.Contains(Coord))
+		{
+			continue;
+		}
+
+		if (OnlineSource)
+		{
+			const double Margin = (2.0 * CellSizeMeters) + (OnlineSource->TileSizeMeters / 128.0);
+			const double MinX = double(Coord.X) * ChunkSizeMeters - Margin;
+			const double MinY = double(Coord.Y) * ChunkSizeMeters - Margin;
+			const double MaxX = double(Coord.X + 1) * ChunkSizeMeters + Margin;
+			const double MaxY = double(Coord.Y + 1) * ChunkSizeMeters + Margin;
+
+			if (!OnlineSource->EnsureTilesForRect(MinX, MinY, MaxX, MaxY))
 			{
-				const double CenterX = (double(Coord.X) + 0.5) * ChunkSizeMeters;
-				const double CenterY = (double(Coord.Y) + 0.5) * ChunkSizeMeters;
-
-				if (!OnlineSource->IsTileReady(CenterX, CenterY))
-				{
-					// Ýstek at (download baþlat) ve bu frame bu chunk'ý atla (döngüdeki sonrakine geç)
-					OnlineSource->GetBaseHeightMeters(CenterX, CenterY);
-					continue; // Artýk bir döngünün içinde olduðu için geçerlidir!
-				}
+				continue;
 			}
+		}
 
-			// Karo hazýrsa chunk aktörünü spawn et
-			FActorSpawnParameters SpawnParams;
-			SpawnParams.Owner = this;
-			AWTChunkActor* NewChunk = GetWorld()->SpawnActor<AWTChunkActor>(
-				AWTChunkActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.Owner = this;
+		AWTChunkActor* NewChunk = GetWorld()->SpawnActor<AWTChunkActor>(
+			AWTChunkActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
 
-			NewChunk->BuildChunkAsync(HeightSource, Coord, ChunkSizeMeters, CellSizeMeters, TerrainMaterial);
-			ActiveChunks.Add(Coord, NewChunk);
+		NewChunk->BuildChunkAsync(HeightSource, Coord, ChunkSizeMeters, CellSizeMeters, TerrainMaterial);
+		ActiveChunks.Add(Coord, NewChunk);
+
+		SpawnedThisUpdate++;
+		if (SpawnedThisUpdate >= MaxNewChunksPerUpdate)
+		{
+			break;
 		}
 	}
 

@@ -50,20 +50,25 @@ float UWTNoiseHeightSource::GetBaseHeightMeters(double X, double Y) const
 {
 	FVector2D P(X, Y);
 
-	// DOMAIN WARPING: Koordinatlarý baþka bir gürültüyle saptýrýyoruz (Doðallýk katan kýsým)
-	const float WarpX = FBm((P + CachedNoiseOffset) / 800.f, 2) * 150.f;
-	const float WarpY = FBm((P + CachedNoiseOffset + FVector2D(123.4, 567.8)) / 800.f, 2) * 150.f;
+	// Katmanlarýn birbirine yapýþmasýný önlemek için sabit ofset türetiyoruz (Decorrelation)
+	const FVector2D WarpOffset = CachedNoiseOffset + FVector2D(127.1, 311.7);
+	const FVector2D MaskOffset = CachedNoiseOffset + FVector2D(269.5, 183.3);
+	const FVector2D MacroOffset = CachedNoiseOffset;
+	const FVector2D DetailOffset = CachedNoiseOffset + FVector2D(419.2, 371.9);
+
+	// Domain Warping
+	const float WarpX = FBm((P + WarpOffset) / 800.f, 2) * 150.f;
+	const float WarpY = FBm((P + WarpOffset + FVector2D(41.3, 289.1)) / 800.f, 2) * 150.f;
 	P += FVector2D(WarpX, WarpY);
 
-	// Drivability (Sakin bölge vs Daðlýk bölge)
-	float Mask = FBm(P / DrivabilityWavelengthMeters + CachedNoiseOffset, 2) * 0.5f + 0.5f;
+	// Drivability Mask
+	float Mask = FBm(P / DrivabilityWavelengthMeters + MaskOffset, 2) * 0.5f + 0.5f;
 	Mask = FMath::Pow(FMath::Clamp(Mask, 0.f, 1.f), DrivabilityContrast);
-
 	const float Relief = FMath::Lerp(MinReliefInCalmZones, 1.f, Mask);
 
-	// Zirveler ve vadiler
-	const float Macro = FBm(P / MacroWavelengthMeters + CachedNoiseOffset, MacroOctaves) * MacroAmplitudeMeters;
-	const float Detail = FBm(P / DetailWavelengthMeters + CachedNoiseOffset, DetailOctaves) * DetailAmplitudeMeters;
+	// Macro ve Detail
+	const float Macro = FBm(P / MacroWavelengthMeters + MacroOffset, MacroOctaves) * MacroAmplitudeMeters;
+	const float Detail = FBm(P / DetailWavelengthMeters + DetailOffset, DetailOctaves) * DetailAmplitudeMeters;
 
 	return (Macro + Detail) * Relief;
 }
