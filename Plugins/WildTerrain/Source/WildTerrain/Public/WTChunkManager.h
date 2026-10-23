@@ -11,6 +11,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnTerrainReadySignature);
 class AWTChunkActor;
 class UWTHeightSource;
 class UMaterialInterface;
+class UWTBiomeConfig;
+class UMaterialParameterCollection;
 
 /** Phase 1 test actor: drop in a level, assign a HeightSource, press Play. Replaced by the chunk manager in Phase 2. */
 UCLASS()
@@ -27,6 +29,12 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain")
 	TObjectPtr<UMaterialInterface> TerrainMaterial;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain|Biome")
+	TObjectPtr<UWTBiomeConfig> BiomeConfig;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Terrain|Biome")
+	TObjectPtr<UMaterialParameterCollection> BiomeMPC;
 
 	/** Zemin tamamen hazýr olduðunda GameMode'u tetikleyecek Event Dispatcher */
 	UPROPERTY(BlueprintAssignable, Category = "Terrain|Events")
@@ -60,6 +68,9 @@ public:
 	/** Verilen X, Y koordinatýnýn zemin yüksekliðini güvenle cm cinsinden döner */
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Terrain")
 	FVector GetGroundLocationAt(double WorldX_Cm, double WorldY_Cm, float OffsetZ_Cm = 100.f) const;
+
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Terrain|Biome")
+	float GetBiomeWeightAtLocation(FVector WorldLocation) const;
 
 	/** Chunk Actor collision üretimi bittiðinde burayý bilgilendirir */
 	void NotifyChunkFinishedBuilding(FIntPoint Coord);

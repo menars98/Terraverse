@@ -8,6 +8,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
 #include "WTOnlineHeightSource.h"
+#include "WTBiomeConfig.h"
 #include "GameFramework/PlayerStart.h"
 
 AWTChunkManager::AWTChunkManager()
@@ -27,6 +28,18 @@ FVector AWTChunkManager::GetGroundLocationAt(double WorldX_Cm, double WorldY_Cm,
 	const float GroundMeters = HeightSource->GetHeightMeters(XMeters, YMeters);
 
 	return FVector(WorldX_Cm, WorldY_Cm, (GroundMeters * 100.0) + OffsetZ_Cm);
+}
+
+float AWTChunkManager::GetBiomeWeightAtLocation(FVector WorldLocation) const
+{
+	const double WX = (WorldLocation.X * 0.01) / 12000.0; // 12 km ölçek
+	const double WY = (WorldLocation.Y * 0.01) / 12000.0;
+
+	const double SinVal = FMath::Sin(WX);
+	const double CosVal = FMath::Cos(WY);
+	const float RawWeight = float((SinVal + CosVal) * 0.5 + 0.5);
+
+	return FMath::Clamp(RawWeight, 0.0f, 1.0f);
 }
 
 void AWTChunkManager::NotifyChunkFinishedBuilding(FIntPoint Coord)
@@ -54,6 +67,11 @@ void AWTChunkManager::BeginPlay()
 
 	bIsTerrainReady = false;
 	PendingInitialCoords.Empty();
+
+	if (BiomeConfig && BiomeMPC)
+	{
+		BiomeConfig->ApplyToMaterialCollection(this, BiomeMPC);
+	}
 
 	// Baþlangýçta (0,0) etrafýndaki 3x3 = 9 chunk'ý 'Kritik Beklenen' listesine alýyoruz
 	for (int32 Y = -1; Y <= 1; ++Y)
