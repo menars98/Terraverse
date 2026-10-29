@@ -4,7 +4,9 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "WTClimate.h"
 #include "WTChunkActor.generated.h"
+
 
 class UProceduralMeshComponent;
 class UWTHeightSource;
@@ -17,6 +19,7 @@ struct FChunkMeshData
 	TArray<int32> Triangles;
 	TArray<FVector> Normals;
 	TArray<FVector2D> UVs;
+	TArray<FColor> Colors;
 };
 
 /** One square terrain tile with render mesh + collision. Phase 1: built synchronously. */
@@ -28,9 +31,14 @@ class WILDTERRAIN_API AWTChunkActor : public AActor
 public:
 	AWTChunkActor();
 
-	// Builds the chunk mesh asynchronously on a worker thread, then applies it on the game thread.
-	void BuildChunkAsync(const UWTHeightSource* Source, FIntPoint ChunkCoord, float ChunkSizeMeters, float CellSizeMeters, UMaterialInterface* Material);
+	/** Oyun esnasýnda asenkron (arkaplan iþ parçacýðýnda) üretim */
+	void BuildChunkAsync(const UWTHeightSource* Source, FIntPoint ChunkCoord, float ChunkSizeMeters,
+		float CellSizeMeters, UMaterialInterface* Material, const FWTClimateParams& Climate, bool bEnableCollision);
 
+	/** Editörde butona basýldýðýnda anýnda (senkron) üretim */
+	void BuildChunkSync(const UWTHeightSource* Source, FIntPoint ChunkCoord, float ChunkSizeMeters,
+		float CellSizeMeters, UMaterialInterface* Material, const FWTClimateParams& Climate, bool bEnableCollision);
+	
 	FIntPoint GetChunkCoord() const { return Coord; }
 	bool IsBuilding() const { return bIsBuilding; }
 
@@ -43,9 +51,9 @@ private:
 
 	/** Worker Thread tarafýndan iþletilen saf hesaplama fonksiyonu */
 	static FChunkMeshData GenerateRawMeshData(const UWTHeightSource* Source, FIntPoint ChunkCoord,
-		float ChunkSizeMeters, float CellSizeMeters);
+		float ChunkSizeMeters, float CellSizeMeters, const FWTClimateParams& Climate);
 
 	/** Game Thread üzerinde mesh ve collision'ý devreye alan fonksiyon */
-	void ApplyMeshData_GameThread(FChunkMeshData MeshData, UMaterialInterface* Material);
+	void ApplyMeshData_GameThread(FChunkMeshData MeshData, UMaterialInterface* Material, bool bEnableCollision);
 
 };

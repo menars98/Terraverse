@@ -1,7 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
-
-#include "WTChunkManager.h"
+﻿#include "WTChunkManager.h"
 #include "WTChunkActor.h"
 #include "WTHeightSource.h"
 #include "Engine/World.h"
@@ -10,10 +7,95 @@
 #include "WTOnlineHeightSource.h"
 #include "WTBiomeConfig.h"
 #include "GameFramework/PlayerStart.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Engine/Texture2D.h"
 
 AWTChunkManager::AWTChunkManager()
 {
 	PrimaryActorTick.bCanEverTick = false;
+}
+
+void AWTChunkManager::GenerateTerrainInEditor()
+{
+	ClearTerrainInEditor();
+
+	if (!HeightSource)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Terraverse: HeightSource atanmamis!"));
+		return;
+	}
+
+	Climate.Init();
+
+	if (TerrainMaterial && !TerrainMID)
+	{
+		TerrainMID = UMaterialInstanceDynamic::Create(TerrainMaterial, this);
+	}
+	GenerateClimateTexture();
+
+	// Manager aktörünün koordinatını merkez al
+	const FIntPoint CenterCoord = WorldToChunkCoord(GetActorLocation());
+
+	// --- İŞTE EKSİK OLAN KISIM: DİSKTEKİ KAROLARI RAM'E YÜKLE ---
+	if (UWTOnlineHeightSource* OnlineSource = Cast<UWTOnlineHeightSource>(HeightSource))
+	{
+		const double TotalRadiusMeters = (HorizonDistanceChunks + 1) * ChunkSizeMeters;
+		const double CenterX = GetActorLocation().X * 0.01;
+		const double CenterY = GetActorLocation().Y * 0.01;
+
+		// Diskten karoları hafızaya yükle
+		OnlineSource->EnsureTilesForRect(
+			CenterX - TotalRadiusMeters,
+			CenterY - TotalRadiusMeters,
+			CenterX + TotalRadiusMeters,
+			CenterY + TotalRadiusMeters
+		);
+	}
+
+	// --- ŞİMDİ CHUNK'LARI OLUŞTUR (Artık yükseklikleri okuyabilecek!) ---
+	for (int32 Y = -HorizonDistanceChunks; Y <= HorizonDistanceChunks; ++Y)
+	{
+		for (int32 X = -HorizonDistanceChunks; X <= HorizonDistanceChunks; ++X)
+		{
+			const FIntPoint Coord = CenterCoord + FIntPoint(X, Y);
+			const int32 Dist = FMath::Max(FMath::Abs(X), FMath::Abs(Y));
+
+			const bool bHasCollision = (Dist <= CollisionRadiusChunks);
+
+			// 3 Kademeli Akıllı LOD Hesabı (Editörün donmasını engeller):
+			float CellSize = NearCellSizeMeters;
+			if (Dist > DetailDistanceChunks)
+			{
+				CellSize = HorizonCellSizeMeters; // 32m (Ufuktaki dağlar - Ultra hafif!)
+			}
+			else if (Dist > 1)
+			{
+				CellSize = FarCellSizeMeters; // 8m (Orta mesafe)
+			}
+
+			FActorSpawnParameters SpawnParams;
+			SpawnParams.Owner = this;
+			AWTChunkActor* NewChunk = GetWorld()->SpawnActor<AWTChunkActor>(
+				AWTChunkActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
+
+			NewChunk->BuildChunkSync(HeightSource, Coord, ChunkSizeMeters, CellSize,
+				TerrainMID ? TerrainMID : TerrainMaterial, Climate, bHasCollision);
+
+			ActiveChunks.Add(Coord, NewChunk);
+		}
+	}
+}
+
+void AWTChunkManager::ClearTerrainInEditor()
+{
+	for (auto& Pair : ActiveChunks)
+	{
+		if (Pair.Value)
+		{
+			Pair.Value->Destroy();
+		}
+	}
+	ActiveChunks.Empty();
 }
 
 FVector AWTChunkManager::GetGroundLocationAt(double WorldX_Cm, double WorldY_Cm, float OffsetZ_Cm) const
@@ -30,16 +112,35 @@ FVector AWTChunkManager::GetGroundLocationAt(double WorldX_Cm, double WorldY_Cm,
 	return FVector(WorldX_Cm, WorldY_Cm, (GroundMeters * 100.0) + OffsetZ_Cm);
 }
 
-float AWTChunkManager::GetBiomeWeightAtLocation(FVector WorldLocation) const
+UWTBiomeConfig* AWTChunkManager::GetDominantBiomeAtLocation(FVector WorldLocation) const
 {
-	const double WX = (WorldLocation.X * 0.01) / 12000.0; // 12 km �l�ek
-	const double WY = (WorldLocation.Y * 0.01) / 12000.0;
+	if (BiomeConfigs.IsEmpty())
+	{
+		return nullptr;
+	}
 
-	const double SinVal = FMath::Sin(WX);
-	const double CosVal = FMath::Cos(WY);
-	const float RawWeight = float((SinVal + CosVal) * 0.5 + 0.5);
+	const FVector2D C = Climate.Sample(WorldLocation.X * 0.01, WorldLocation.Y * 0.01);
+	const float CurrentTemp = C.X;
+	const float CurrentMoisture = C.Y;
 
-	return FMath::Clamp(RawWeight, 0.0f, 1.0f);
+	UWTBiomeConfig* BestBiome = BiomeConfigs[0];
+	float ShortestDistSq = FLT_MAX;
+
+	for (UWTBiomeConfig* Biome : BiomeConfigs)
+	{
+		if (!Biome) continue;
+
+		const float DistSq = FMath::Square(CurrentTemp - Biome->IdealTemperature) +
+			FMath::Square(CurrentMoisture - Biome->IdealMoisture);
+
+		if (DistSq < ShortestDistSq)
+		{
+			ShortestDistSq = DistSq;
+			BestBiome = Biome;
+		}
+	}
+
+	return BestBiome;
 }
 
 void AWTChunkManager::NotifyChunkFinishedBuilding(FIntPoint Coord)
@@ -51,34 +152,51 @@ void AWTChunkManager::NotifyChunkFinishedBuilding(FIntPoint Coord)
 
 	PendingInitialCoords.Remove(Coord);
 
-	// Kritik 9 chunk'�n tamam�n�n fizik ve collision'� bitti mi?
 	if (PendingInitialCoords.IsEmpty())
 	{
 		bIsTerrainReady = true;
-
-		// GameMode ve dinleyen herkesi haberdar et!
 		OnTerrainReady.Broadcast();
 	}
 }
 
 void AWTChunkManager::BeginPlay()
 {
+	// Editörden kalma eski önizleme chunk'ları varsa temizle
+	ClearTerrainInEditor();
+
+	Climate.Init();
+
+	if (TerrainMaterial)
+	{
+		TerrainMID = UMaterialInstanceDynamic::Create(TerrainMaterial, this);
+		GenerateClimateTexture();
+	}
+
 	Super::BeginPlay();
 
 	bIsTerrainReady = false;
 	PendingInitialCoords.Empty();
 
-	if (BiomeConfig && BiomeMPC)
+	FVector InitialCenter = FVector::ZeroVector;
+	if (APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0))
 	{
-		BiomeConfig->ApplyToMaterialCollection(this, BiomeMPC);
+		InitialCenter = PlayerPawn->GetActorLocation();
+	}
+	else if (AActor* PlayerStart = UGameplayStatics::GetActorOfClass(this, APlayerStart::StaticClass()))
+	{
+		InitialCenter = PlayerStart->GetActorLocation();
+	}
+	else
+	{
+		InitialCenter = GetActorLocation();
 	}
 
-	// Ba�lang��ta (0,0) etraf�ndaki 3x3 = 9 chunk'� 'Kritik Beklenen' listesine al�yoruz
+	const FIntPoint StartCoord = WorldToChunkCoord(InitialCenter);
 	for (int32 Y = -1; Y <= 1; ++Y)
 	{
 		for (int32 X = -1; X <= 1; ++X)
 		{
-			PendingInitialCoords.Add(FIntPoint(X, Y));
+			PendingInitialCoords.Add(StartCoord + FIntPoint(X, Y));
 		}
 	}
 
@@ -100,6 +218,98 @@ FIntPoint AWTChunkManager::WorldToChunkCoord(const FVector& WorldLocation) const
 	);
 }
 
+void AWTChunkManager::GenerateClimateTexture()
+{
+	if (!TerrainMID || BiomeConfigs.IsEmpty())
+	{
+		return;
+	}
+
+	const int32 Width = 256;
+	const int32 Height = 64;
+
+	RuntimeClimateTexture = UTexture2D::CreateTransient(Width, Height, PF_FloatRGBA);
+	RuntimeClimateTexture->Filter = TF_Bilinear;
+	RuntimeClimateTexture->SRGB = 0;
+	RuntimeClimateTexture->AddressX = TA_Clamp;
+	RuntimeClimateTexture->AddressY = TA_Clamp;
+
+	FByteBulkData* RawImageData = &RuntimeClimateTexture->GetPlatformData()->Mips[0].BulkData;
+	FFloat16Color* Pixels = static_cast<FFloat16Color*>(RawImageData->Lock(LOCK_READ_WRITE));
+
+	for (int32 Y = 0; Y < Height; ++Y)
+	{
+		const float M = float(Y) / float(Height - 1);
+
+		for (int32 X = 0; X < Width; ++X)
+		{
+			const int32 SliceIndex = X / 64;
+			const float T = float(X % 64) / 63.f; // Heat
+
+			FLinearColor BlendedColor = FLinearColor::Black;
+			float TotalWeight = 0.f;
+
+			// En yakın biyomu bulmak için (Kar sınırının bozulmaması için)
+			const UWTBiomeConfig* ClosestBiome = nullptr;
+			float ShortestDistSq = FLT_MAX;
+
+			for (const UWTBiomeConfig* Biome : BiomeConfigs)
+			{
+				if (!Biome) continue;
+
+				const float DistSq = FMath::Square(T - Biome->IdealTemperature) + FMath::Square(M - Biome->IdealMoisture);
+
+				// 1. En yakın biyomu takip et (Alpha kanalları için)
+				if (DistSq < ShortestDistSq)
+				{
+					ShortestDistSq = DistSq;
+					ClosestBiome = Biome;
+				}
+
+				// 2. Renkler için yumuşak harmanlama ağırlığı
+				const float Weight = 1.0f / (FMath::Pow(DistSq, BiomeBlendSharpness) + 1e-6f);
+
+				FLinearColor TargetColor;
+				switch (SliceIndex)
+				{
+				case 0:  TargetColor = Biome->GrassColor; break;
+				case 1:  TargetColor = Biome->DirtColor;  break;
+				case 2:  TargetColor = Biome->RockColor;  break;
+				default: TargetColor = Biome->SnowColor;  break;
+				}
+
+				BlendedColor += TargetColor * Weight;
+				TotalWeight += Weight;
+			}
+
+			if (TotalWeight > 0.f)
+			{
+				BlendedColor /= TotalWeight;
+			}
+
+			// KRİTİK NOKTA: Alpha değerleri ortalama ALINMAZ! Doğrudan o pikselin ait olduğu biyomdan net alınır:
+			float FinalAlpha = 0.f;
+			if (ClosestBiome)
+			{
+				switch (SliceIndex)
+				{
+				case 0:  FinalAlpha = ClosestBiome->SnowLineMeters;    break;
+				case 1:  FinalAlpha = ClosestBiome->SnowBandMeters;    break;
+				case 2:  FinalAlpha = ClosestBiome->SnowJitterMeters;  break;
+				default: FinalAlpha = ClosestBiome->TreeLineGapMeters; break;
+				}
+			}
+
+			Pixels[Y * Width + X] = FFloat16Color(FLinearColor(BlendedColor.R, BlendedColor.G, BlendedColor.B, FinalAlpha));
+		}
+	}
+
+	RawImageData->Unlock();
+	RuntimeClimateTexture->UpdateResource();
+
+	TerrainMID->SetTextureParameterValue(FName("ClimateLUT"), RuntimeClimateTexture);
+}
+
 void AWTChunkManager::UpdateStreaming()
 {
 	if (!HeightSource)
@@ -107,7 +317,6 @@ void AWTChunkManager::UpdateStreaming()
 		return;
 	}
 
-	// 1. Merkez noktas�n� belirle: Araba varsa arabay�, hen�z do�mad�ysa PlayerStart'� referans al!
 	FVector CenterLocation = FVector::ZeroVector;
 	if (APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0))
 	{
@@ -119,22 +328,22 @@ void AWTChunkManager::UpdateStreaming()
 	}
 	else
 	{
-		CenterLocation = GetActorLocation(); // En k�t� ihtimal Manager'�n kendi konumu
+		CenterLocation = GetActorLocation();
 	}
 
 	const FIntPoint CurrentCoord = WorldToChunkCoord(CenterLocation);
 
-	// 2. Gereken chunk koordinatlar�n� topla
+	// 1. Ufka kadar olan tüm koordinatları topla (HorizonDistanceChunks kadar!)
 	TSet<FIntPoint> RequiredCoords;
-	for (int32 Y = -ViewDistanceChunks; Y <= ViewDistanceChunks; ++Y)
+	for (int32 Y = -HorizonDistanceChunks; Y <= HorizonDistanceChunks; ++Y)
 	{
-		for (int32 X = -ViewDistanceChunks; X <= ViewDistanceChunks; ++X)
+		for (int32 X = -HorizonDistanceChunks; X <= HorizonDistanceChunks; ++X)
 		{
 			RequiredCoords.Add(CurrentCoord + FIntPoint(X, Y));
 		}
 	}
 
-	// 3. Art�k menzilde olmayanlar� sil
+	// 2. Artık menzilde olmayanları sil
 	TArray<FIntPoint> CoordsToRemove;
 	for (auto& Pair : ActiveChunks)
 	{
@@ -152,7 +361,7 @@ void AWTChunkManager::UpdateStreaming()
 		ActiveChunks.Remove(Coord);
 	}
 
-	// 4. Mesafeye g�re s�rala (Merkez ilk s�rada!)
+	// 3. Mesafeye göre sırala (Merkez ilk sırada)
 	TArray<FIntPoint> SortedCoords = RequiredCoords.Array();
 	SortedCoords.Sort([&](const FIntPoint& A, const FIntPoint& B)
 		{
@@ -161,10 +370,9 @@ void AWTChunkManager::UpdateStreaming()
 			return DistA < DistB;
 		});
 
-	// 5. Chunk �retimi
 	UWTOnlineHeightSource* OnlineSource = Cast<UWTOnlineHeightSource>(HeightSource);
 	int32 SpawnedThisUpdate = 0;
-	const int32 MaxNewChunksPerUpdate = 4;
+	const int32 MaxNewChunksPerUpdate = 3;
 
 	for (const FIntPoint& Coord : SortedCoords)
 	{
@@ -173,9 +381,26 @@ void AWTChunkManager::UpdateStreaming()
 			continue;
 		}
 
+		// --- KADEMELİ LOD VE COLLISION SİSTEMİ ---
+		const int32 DistFromPlayer = FMath::Max(FMath::Abs(Coord.X - CurrentCoord.X), FMath::Abs(Coord.Y - CurrentCoord.Y));
+
+		// Sadece yakındaki chunk'lar fizik çarpışması (Collision) üretir!
+		const bool bNeedsCollision = (DistFromPlayer <= CollisionRadiusChunks);
+
+		// 3 Kademeli Hücre Boyutu:
+		float CellSize = NearCellSizeMeters; // 2m (Arabanın altı)
+		if (DistFromPlayer > DetailDistanceChunks)
+		{
+			CellSize = HorizonCellSizeMeters; // 32m (Ufuktaki dağlar - Sıfır maliyet!)
+		}
+		else if (DistFromPlayer > 1)
+		{
+			CellSize = FarCellSizeMeters; // 8m (Orta mesafe)
+		}
+
 		if (OnlineSource)
 		{
-			const double Margin = (2.0 * CellSizeMeters) + (OnlineSource->TileSizeMeters / 128.0);
+			const double Margin = (2.0 * CellSize) + (OnlineSource->TileSizeMeters / 128.0);
 			const double MinX = double(Coord.X) * ChunkSizeMeters - Margin;
 			const double MinY = double(Coord.Y) * ChunkSizeMeters - Margin;
 			const double MaxX = double(Coord.X + 1) * ChunkSizeMeters + Margin;
@@ -192,7 +417,9 @@ void AWTChunkManager::UpdateStreaming()
 		AWTChunkActor* NewChunk = GetWorld()->SpawnActor<AWTChunkActor>(
 			AWTChunkActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
 
-		NewChunk->BuildChunkAsync(HeightSource, Coord, ChunkSizeMeters, CellSizeMeters, TerrainMaterial);
+		NewChunk->BuildChunkAsync(HeightSource, Coord, ChunkSizeMeters, CellSize,
+			TerrainMID ? TerrainMID : TerrainMaterial, Climate, bNeedsCollision);
+
 		ActiveChunks.Add(Coord, NewChunk);
 
 		SpawnedThisUpdate++;
