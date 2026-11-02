@@ -6,6 +6,51 @@
 
 class UMaterialParameterCollection;
 
+class UStaticMesh;
+
+USTRUCT(BlueprintType)
+struct WILDTERRAIN_API FWTPropRule
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Prop")
+	FString RuleName = TEXT("Agac veya Kaya");
+
+	/** Buraya istediðin kadar varyasyon (Aðaç 1, Aðaç 2 veya Kaya 1, Kaya 2) koyabilirsin! */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Prop")
+	TArray<TObjectPtr<UStaticMesh>> Meshes;
+
+	/** Kaç metrede bir kontrol edilsin? (Örn: Aðaç için 14m, Kaya için 20m) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Prop", meta = (ClampMin = "4.0"))
+	float GridSpacingMeters = 14.f;
+
+	/** O noktada çýkma ihtimali (0.0 - 1.0) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Prop", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float SpawnChance = 0.5f;
+
+	/** Kaç dereceden dik yamaçta çýkamaz? (Aðaçlar için 30°, Kayalar için 60°) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Prop")
+	float MaxSlopeDegrees = 30.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Prop")
+	float MinSlopeDegrees = 0.f;
+
+	/** Kar çizgisine ne kadar kala aðaçlar bitsin? (Aðaç sýnýrý / Tree-line) */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Prop")
+	float StopBeforeSnowMeters = 30.f;
+
+	/** Rastgele boyut aralýðý */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Prop")
+	float MinScale = 0.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Prop")
+	float MaxScale = 1.3f;
+
+	/** True = Kayalar gibi yamaca yapýþsýn. False = Aðaçlar gibi dimdik göðe baksýn! */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Prop")
+	bool bAlignToSurfaceNormal = false;
+};
+
 UENUM(BlueprintType)
 enum class EWTBiomeType : uint8
 {
@@ -71,4 +116,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Biome|Climate", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float IdealMoisture = 0.5f;
 
+	// Prop Rules
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Biome|Props")
+	TArray<FWTPropRule> PropRules;
 };

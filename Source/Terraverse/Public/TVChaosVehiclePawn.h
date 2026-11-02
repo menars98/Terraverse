@@ -48,6 +48,13 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputAction> LookAction;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> ToggleCameraAction;
+
+	void ToggleCameraTriggered();
+
+	bool bIsCockpitView = false;
+
 	// --- GÝRDÝ METOTLARI ---
 	void ThrottleTriggered(const FInputActionValue& Value);
 	void ThrottleCompleted(const FInputActionValue& Value);

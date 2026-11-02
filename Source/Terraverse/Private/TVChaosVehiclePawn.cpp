@@ -50,6 +50,7 @@ void ATVChaosVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInput
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
+
 	if (UEnhancedInputComponent* EnhancedInputComponent = Cast<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		if (ThrottleAction)
@@ -74,6 +75,31 @@ void ATVChaosVehiclePawn::SetupPlayerInputComponent(UInputComponent* PlayerInput
 		{
 			EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &ATVChaosVehiclePawn::LookTriggered);
 		}
+
+		if (ToggleCameraAction)
+		{
+			EnhancedInputComponent->BindAction(ToggleCameraAction, ETriggerEvent::Started, this, &ATVChaosVehiclePawn::ToggleCameraTriggered);
+		}
+	}
+}
+
+void ATVChaosVehiclePawn::ToggleCameraTriggered()
+{
+	bIsCockpitView = !bIsCockpitView;
+
+	if (bIsCockpitView)
+	{
+		// 1. KOKPÝT GÖRÜÞÜ (Sürücü Koltuðu)
+		SpringArm->TargetArmLength = 0.0f; // Kolu sýfýrla, kamerayý doðrudan arabaya yapýþtýr
+		SpringArm->SocketOffset = FVector(20.0f, -40.0f, 110.0f); // Direksiyonun arkasý (Sürücü kafasý hizasý)
+		SpringArm->bEnableCameraLag = false; // Kokpitte kamera gecikmesi olmasýn
+	}
+	else
+	{
+		// 2. DIÞ GÖRÜÞ (Arkadan Takip)
+		SpringArm->TargetArmLength = 650.0f;
+		SpringArm->SocketOffset = FVector(0.0f, 0.0f, 150.0f);
+		SpringArm->bEnableCameraLag = true; // Sinematik takip gecikmesi aktif
 	}
 }
 

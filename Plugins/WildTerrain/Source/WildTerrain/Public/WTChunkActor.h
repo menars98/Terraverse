@@ -11,6 +11,8 @@
 class UProceduralMeshComponent;
 class UWTHeightSource;
 class UMaterialInterface;
+class UHierarchicalInstancedStaticMeshComponent;
+class AWTChunkManager;
 
 /** Struct for holding raw mesh data to be transferred from the Worker Thread to the Game Thread */
 struct FChunkMeshData
@@ -42,9 +44,15 @@ public:
 	FIntPoint GetChunkCoord() const { return Coord; }
 	bool IsBuilding() const { return bIsBuilding; }
 
+	void SpawnPropsForChunk(AWTChunkManager* Manager);
 private:
 	UPROPERTY(VisibleAnywhere, Category = "Terrain")
 	TObjectPtr<UProceduralMeshComponent> Mesh;
+
+	UPROPERTY()
+	TMap<TObjectPtr<UStaticMesh>, TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> PropHISMComponents;
+
+	void ClearProps();
 
 	FIntPoint Coord = FIntPoint::ZeroValue;
 	bool bIsBuilding = false;
